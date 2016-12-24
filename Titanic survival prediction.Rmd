@@ -1,0 +1,416 @@
+---
+title: "Titanic Survival Prediction"
+author: "Satsawat N."
+date: "December 24, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(data.table)
+library(gridExtra)
+
+options(warn=-1)
+
+rm(list=ls())
+my.dir <- "D:/Projects/5.0 Personal project/2.0 Kaggle - Titanic/"
+training.file <- "train.csv"
+testing.file <- "test.csv"
+
+setwd(my.dir)
+
+read.data <- function(x) {
+  if (x == 'test')
+    df <- read.csv(paste0(my.dir, testing.file), header=T, sep=',', stringsAsFactors=F, na.strings=c("",".","NA"))
+  else
+    df <- read.csv(paste0(my.dir, training.file), header=T, sep=',', stringsAsFactors=F, na.strings=c("",".","NA"))
+  colnames(df) <- tolower(colnames(df))
+  return(df)
+}
+
+training.data <- read.data('train')
+```
+
+## Quick Introduction
+
+The popular Titanic dataset ia available and as part of practice competition in [Kaggle](https://www.kaggle.com/c/titanic). This provides very interesting and a first-step to world of machine learning and prediction for anyone who is interested in.
+
+Let's load the training datasets and have a quick look.
+
+```{r, echo=FALSE}
+dim(training.data)
+str(training.data)
+head(training.data)
+```
+
+Overall, this is small training dataset, what we are trying to do is to predict the 'survived' binary output (1 - survived, 0 - died).
+
+Other variables definition are as listed:
+
+
+Variable Name | Definition
+------------ | ----------------
+pclass|Passenger Class (1 = 1st; 2 = 2nd; 3 = 3rd)
+name|Name
+sex |Sex
+age |Age
+sibsp| Number of Siblings/Spouses Aboard
+parch| Number of Parents/Children Aboard
+ticket| Ticket Number
+fare| Passenger Fare
+cabin| Cabin
+embarked| Port of Embarkation (C = Cherbourg; Q = Queenstown; S = Southampton)
+
+## Data Exploratory
+
+Now we have the variable definition, next step - check the completeness of the data. I will use *library(Amelia)* for quick visualization on the missing data, and another code to actual get the number of the missing data points. There're 2 main features with missing data *cabin* (approx. 70-ish% missing) and *age* (approx. 20-ish % missing). There are also 2 missing data in *embarked* feature.
+
+We will deal with this later.
+
+```{r, echo=TRUE, eval=FALSE}
+colSums(sapply(training.data, is.na))
+```
+
+```{r, echo=FALSE, fig.width=10, fig.height=10,warning=FALSE}
+library(Amelia)
+missmap(training.data, main = "Titanic missing data heatmap", 
+        col=c("red", "black"), legend=F) 
+
+colSums(sapply(training.data, is.na))
+training.data$survived <- as.factor(training.data$survived)
+training.data$pclass <- as.factor(training.data$pclass)
+training.data$sex <- as.factor(training.data$sex)
+training.data$embarked <- as.factor(training.data$embarked)
+
+```
+
+
+
+### Visualize them all!!!
+
+I create the custom function for reusability. Some variables (passengerid, ticket, and cabin) are omitted from the analysis.
+
+```{r, echo=FALSE, fig.width=10, fig.height=8,warning=FALSE}
+barPlot <- function(df, i) {
+  d <- data.frame(x=df[[i]]) 
+  p <- ggplot(d, aes(factor(x), fill=factor(x))) + 
+    stat_count() + 
+    xlab(colnames(df)[i]) + 
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)
+          , legend.position = "bottom"
+          , legend.title = element_blank()
+    )  
+  return(p)
+}
+
+histPlot <- function(df, i) {
+  d <- data.frame(x=df[[i]])
+  p <- ggplot(d, aes(x)) +
+    geom_histogram(alpha=0.5) +
+    xlab(colnames(df)[i]) +
+    theme_minimal() +
+    theme(legend.position = "right",
+          legend.title = element_blank()
+          )
+  return(p)
+}
+
+lets.plot <- function(df, fun, ii, ncol) {
+  pp <- list()
+  for (i in ii) {
+    p <- fun(df=df, i=i)
+    pp <- c(pp, list(p))
+  }
+  do.call("grid.arrange", c(pp, ncol=ncol))
+}
+
+lets.plot(training.data, fun=barPlot, ii=2:3, ncol=2)
+lets.plot(training.data, fun=barPlot, ii=7:8, ncol=2)
+lets.plot(training.data, fun=barPlot, ii=12, ncol=2)
+lets.plot(training.data, fun=histPlot, ii=c(6,10), ncol=2)
+```
+
+Is there any known hypothesis from the data? I use the *vcd* library, this is very quick and easy way to visualize. In other situation, this kind of plot is very useful for anyone to understand.
+
+This outlook show that gender and travelling class are highly related. 
+
+1. Female gender tends to survive more, hence, gender may impact the order to get onto the lifeboat
+2. Higher the travelling class, the more likelihood to survive as they may get easier access to lifeboat.
+3. Passenger from Cherbourg seems to survive more than other ports, but in deeper look, there are more 1st class passengers from there. Hence, this is somewhat linked to point 2
+
+
+```{r, echo=TRUE, eval=FALSE, warning=FALSE}
+library(vcd)
+mosaicplot(training.data$pclass ~ training.data$survived, 
+           main="Passenger Fate by Traveling Class", shade=FALSE, 
+           color=TRUE, xlab="Passenger class", ylab="Survived")
+```
+
+```{r, echo=FALSE, warning=FALSE}
+library(vcd)
+
+mosaicplot(training.data$pclass ~ training.data$survived, 
+           main="Passenger Fate by Traveling Class", shade=FALSE, 
+           color=TRUE, xlab="Passenger class", ylab="Survived")
+
+mosaicplot(training.data$sex ~ training.data$survived, 
+           main="Passenger Fate by Gender", shade=FALSE, 
+           color=TRUE, xlab="Gender", ylab="Survived")
+
+mosaicplot(paste(training.data$pclass,"-",training.data$sex) ~ training.data$survived, 
+           main="Do gender and traveling class contribute to survival?", shade=F, 
+           color=T, xlab="Class - Gender", ylab="Survived")
+
+mosaicplot(training.data$embarked ~ training.data$survived, 
+           main="Passenger Fate by Emparked port", shade=FALSE, 
+           color=TRUE, xlab="Emparked Port", ylab="Survived")
+
+mosaicplot(training.data$embarked ~ training.data$pclass, 
+           main="Where did the first class mainly come from", shade=FALSE, 
+           color=TRUE, xlab="Emparked Port", ylab="Travelling Class")
+
+```
+
+Another hypothesis is on the age, will the age impact the chance to survive? I found this hypothesis hard to visualize at first glance and there're a lot of missing data, we haven't deal with.
+
+```{r, echo=FALSE}
+a <- ggplot(training.data, aes(survived, age)) +
+  geom_boxplot() +
+  facet_wrap(~training.data$sex) +
+  theme_minimal() +
+  xlab("Survived") +
+  ylab("Age") +
+  ggtitle("Impact on the gender to survival and age distribution")
+
+b <- ggplot(training.data, aes(survived, age)) +
+  geom_boxplot() +
+  facet_wrap(~training.data$pclass) +
+  theme_minimal() +
+  xlab("Survived") + 
+  ylab("Age") +
+  ggtitle("Impact on the travelling class to survival and age distribution")
+
+grid.arrange(a, b, nrow=2, ncol=1)
+```
+
+
+### Fixing the Missing
+
+We are provided with name in the dataset, the name pattern in the dataset is also consistency (with the combination of *Surname, Title First name*). We will try to create new feature, namely **title**, to assist in assigning the age and see if this helps in prediction.
+
+```{r, echo=F}
+training.data$titles <-  gsub("^.*, (.*?)\\..*$", "\\1", training.data$name)
+cat("The initial title after parsing")
+table(training.data$titles)
+```
+
+There are quite a lot, however some titles are actually the same but due to the passager class. I want to simplify this as we already have reliable features *pclass* as class identifier.
+
+```{r, echo=F}
+a <- ggplot(training.data, aes(titles, age)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+        ) +
+  ggtitle("Initial comparing titles with age distribution")
+
+
+# Let's simplify the title
+
+training.data$titles <- gsub("Mlle|Mme|Ms", "Miss", training.data$titles)
+training.data$titles <- gsub("Dona|Lady|Madame|the Countess", "Lady", training.data$titles)
+training.data$titles <- gsub("Don|Jonkheer|Sir|Rev", "Sir", training.data$titles)
+training.data$titles <- gsub("Capt|Col|Dr|Major", "Occupation", training.data$titles)
+b <- ggplot(training.data, aes(titles, age)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+        ) +
+  ggtitle("Simplified titles with age distribution")
+
+grid.arrange(a,b,nrow=2,ncol=1)
+
+training.data$titles <- as.factor(training.data$titles)
+```
+
+This looks good to me. Now let's see which titles have the missing age and their mean and median ages. This can be done with **Hmisc** library. We are also stored the titles with missing data into a temporary vector.
+
+```{r, echo=TRUE, eval=FALSE}
+library(Hmisc)
+bystats(training.data$age, training.data$titles, 
+        fun=function(x)c(Mean=mean(x), Median(median(x))))
+
+missing.age <- unique(training.data$titles[sapply(training.data$age, is.na)])
+```
+
+```{r, echo=F, warning=FALSE, message=FALSE}
+library(Hmisc)
+options(digits=2)
+bystats(training.data$age, training.data$titles,
+        fun=function(x)c(Mean=mean(x), Median=median(x)))
+
+missing.age <- unique(training.data$titles[sapply(training.data$age, is.na)])
+print(missing.age)
+```
+
+This basic custom function can use to help fixing each of the missing ages. This variable looks ok to me now.
+
+```{r, eval=FALSE, echo=TRUE}
+fill.NA.with.Median <- function(df.var, filter.var, var.list) {
+  for (v in var.list) {
+    df.var[which(filter.var == v & is.na(df.var))] <- median(df.var[which(filter.var == v)], na.rm=T)
+  }
+  return (df.var)
+}
+```
+
+```{r, echo=FALSE, message=FALSE}
+fill.NA.with.Median <- function(df.var, filter.var, var.list) {
+  for (v in var.list) {
+    df.var[which(filter.var == v & is.na(df.var))] <- median(df.var[which(filter.var == v)], na.rm=T)
+  }
+  return (df.var)
+}
+training.data$age <- fill.NA.with.Median(training.data$age, training.data$titles, missing.age)
+bystats(training.data$age, training.data$titles,
+        fun=function(x)c(Mean=mean(x), Median=median(x)))
+```
+
+Continue to fix the next 2 variables I'm interested in;
+
+* embarked - 2 missings
+* fare - this is not missing but some data have fare = 0, we will fix this as well
+
+To fix embarked, looking at the fare comparing to the median of the same class passengers and same cabin (which is 1st class and cabin starts with B). The closest one is 'C', hence I will assign this to the missing embarked. 
+*(__Note__: the quick and dirty way, is to use the mode of **embarked** from the entire datasets, this will give us S port instead).*
+
+```{r, eval=FALSE, echo=TRUE}
+training.data$embarked[which(is.na(training.data$embarked))] <- 'C'
+```
+
+```{r, echo=FALSE, warning=FALSE}
+summary(training.data$embarked)
+
+training.data %>% 
+  select(embarked, pclass, fare, cabin) %>%
+  filter(is.na(embarked))
+
+library(stringr)
+
+tmp <- training.data %>%
+  select(embarked, cabin, pclass, fare) %>%
+  filter(str_detect(cabin, "B") & pclass == 1 & !is.na(embarked))
+
+bystats(tmp$fare, tmp$embarked, fun=function(x)c(Mean=mean(x), Median=median(x)))
+rm(tmp)
+training.data$embarked[which(is.na(training.data$embarked))] <- 'C'
+
+```
+
+I will apply the similar concept to fix fare by examining the embarked port and passenger class and compare with median of the same grouping.
+
+There are 15 observations - all embarked from Southampton port. Below display the mean and median of fare for each passenger class deporting from Southampton, I will use the median to pad the missing fare for each class.
+
+```{r fixing fare, echo=FALSE}
+training.data$fare[which(training.data$fare == 0)] <- NA
+
+training.data %>%
+  select(fare, embarked, pclass) %>%
+  filter(is.na(fare))
+
+tmp <- training.data %>%
+  select(embarked, pclass, fare) %>%
+  filter(embarked == 'S' & !is.na(fare))
+
+bystats(tmp$fare, tmp$pclass, fun=function(x)c(Mean=mean(x), Median=median(x)))
+
+training.data$fare[which(is.na(training.data$fare) & training.data$pclass == 1)] <- 52.6
+training.data$fare[which(is.na(training.data$fare) & training.data$pclass == 2)] <- 14.5
+training.data$fare[which(is.na(training.data$fare) & training.data$pclass == 3)] <- 8.1
+
+rm(tmp)
+```
+
+```{r check fare, echo=FALSE}
+bystats(training.data$fare, training.data$pclass, 
+        fun=function(x)c(Mean=mean(x), Median=median(x)))
+```
+
+### Prediction
+
+In this model, I will use random forest to demonstrate how we can build the model using the **randomForest** library as well as using **party** library.
+
+I have used following features for prediction and use **caret:createDataPartition** to divide the given training dataset onto training (80%) and testing datasets (20%).
+
+```{r, eval=FALSE, echo=TRUE}
+col.to.use <- c("survived", "pclass", "sex", "age", "sibsp", "parch", "fare", "embarked", "titles")
+
+library(caret)
+set.seed(23)
+intraining <- createDataPartition(training.data.prep$survived, 
+                                  p = 0.8, list = FALSE)
+```
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+col.to.use <- c("survived", "pclass", "sex", "age", "sibsp", "parch", "fare", "embarked", "titles")
+training.data.prep <- training.data[col.to.use]
+
+library(caret)
+set.seed(23)
+intraining <- createDataPartition(training.data.prep$survived, 
+                                  p = 0.8, list = FALSE)
+train.batch <- training.data.prep[intraining, ]
+test.batch <- training.data.prep[-intraining, ]
+
+library(randomForest)
+set.seed(23)
+rf.model <- randomForest(survived ~ ., data=train.batch, importance=T, ntree=100)
+library(party)
+set.seed(23)
+rf.party <- cforest(survived ~ ., data=train.batch,controls = cforest_unbiased(ntree=2000, mtry=3))
+x <- ctree(survived ~ ., data=train.batch)
+
+```
+
+Below show the plot from different random forest library.
+```{r, echo=FALSE}
+plot(rf.model, log="y", main="Random Forest using randomForest library")
+varImpPlot(rf.model, main="Feature Importance of Random Forest")
+plot(x, type="simple", main="Sample Tree from party::ctree function")
+```
+
+```{r, echo=FALSE}
+test.batch.party.pred <- predict(rf.party, test.batch, OOB=T, type="response")
+test.batch.rf.pred <- predict(rf.model, test.batch)
+```
+
+Outcome from randomForest library
+
+```{r}
+confusionMatrix(test.batch.rf.pred, test.batch$survived)
+```
+
+Outcome from party library (unbiased forest)
+
+```{r}
+confusionMatrix(test.batch.party.pred, test.batch$survived)
+```
+
+### Final Thoughts
+
+The outcome is quite good (without any tuning, tree pruning). Both models give satisfied results, with cforest predicted better, I have submitted the Titanic competition with results from cforest, which gives me around 0.79 score in the leaderboard. 
+
+The score is acceptable as we are focusing only 3 main variables - pclass, sex, and fare with additional 1 created feature - titles. 
+
+Next step which I believe is useful or worth looking, if interested:
+
+1. Family size - Does travel with family give you more chance to survive?
+2. Try pruning the tree to improve current model techniques
+3. Implement other model techniques (such as SVM, XGboost, regression)
+
