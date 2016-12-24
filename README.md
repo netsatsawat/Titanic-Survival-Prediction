@@ -1,6 +1,6 @@
 # Titanic-Survival-Prediction
 The popular Titanic dataset ia available and as part of practice competition in [Kaggle](https://www.kaggle.com/c/titanic). 
-
+For the full HTML page output, please click this **[link](http://htmlpreview.github.io/?https://github.com/netsatsawat/Titanic-Survival-Prediction/blob/master/Titanic_survival_prediction.html)**.
 ## Data Exploratory
 
 In the Rmd script, I will use *library(Amelia)* for quick visualization on the missing data, and another code to actual get the number of the missing data points. There are also some other library which I used (apart from ggplot2) to visualize the relationship of the feature to survival binary output.
